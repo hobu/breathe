@@ -1,14 +1,13 @@
-from breathe.renderer.rst.doxygen.base import Renderer
+
+from .base import Renderer
+from .index import render_compound
 
 class DoxygenTypeSubRenderer(Renderer):
 
     def render(self):
 
         compound_renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.compounddef)
-        nodelist = compound_renderer.render()
-
-        return [self.node_factory.block_quote("", *nodelist)]
-
+        return compound_renderer.render()
 
 
 class CompoundDefTypeSubRenderer(Renderer):
@@ -61,24 +60,27 @@ class CompoundDefTypeSubRenderer(Renderer):
 
         if self.data_object.briefdescription:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.briefdescription)
-            nodelist.append(self.node_factory.paragraph("", "", *renderer.render()))
+            nodelist.extend(renderer.render())
 
         if self.data_object.detaileddescription:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.detaileddescription)
-            nodelist.append(self.node_factory.paragraph("", "", *renderer.render()))
+            nodelist.extend(renderer.render())
 
         section_nodelists = {}
 
         # Get all sub sections
         for sectiondef in self.data_object.sectiondef:
             kind = sectiondef.kind
+            node = self.node_factory.desc()
+            node.document = self.state.document
+            node['objtype'] = kind
             renderer = self.renderer_factory.create_renderer(self.data_object, sectiondef)
-            subnodes = renderer.render()
+            node.extend(renderer.render())
             try:
                 # As "user-defined" can repeat
-                section_nodelists[kind] += subnodes
+                section_nodelists[kind] += [node]
             except KeyError:
-                section_nodelists[kind] = subnodes
+                section_nodelists[kind] = [node]
 
         # Order the results in an appropriate manner
         for kind, _ in self.sections:
@@ -87,15 +89,11 @@ class CompoundDefTypeSubRenderer(Renderer):
         # Take care of innerclasses
         for innerclass in self.data_object.innerclass:
             renderer = self.renderer_factory.create_renderer(self.data_object, innerclass)
-            class_nodes = renderer.render()
-            if class_nodes: 
-                nodelist.append(self.node_factory.paragraph("", "", *class_nodes))
+            nodelist.extend(renderer.render())
 
         for innernamespace in self.data_object.innernamespace:
             renderer = self.renderer_factory.create_renderer(self.data_object, innernamespace)
-            namespace_nodes = renderer.render() 
-            if namespace_nodes:
-                nodelist.append(self.node_factory.paragraph("", "", *namespace_nodes))
+            nodelist.extend(renderer.render())
 
         return nodelist
 
@@ -110,7 +108,7 @@ class SectionDefTypeSubRenderer(Renderer):
 
         if self.data_object.description:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.description)
-            node_list.append(self.node_factory.paragraph( "", "", *renderer.render()))
+            node_list.extend(renderer.render())
 
         # Get all the memberdef info
         for memberdef in self.data_object.memberdef:
@@ -129,6 +127,9 @@ class SectionDefTypeSubRenderer(Renderer):
 
         if node_list:
 
+            contentnode = self.node_factory.desc_content()
+            contentnode.extend(node_list)
+
             text = self.section_titles[self.data_object.kind]
 
             # Override default name for user-defined sections. Use "Unnamed
@@ -141,7 +142,11 @@ class SectionDefTypeSubRenderer(Renderer):
                 else:
                     text = "Unnamed Group"
             title = self.node_factory.emphasis(text=text)
-            return [title, self.node_factory.block_quote("", *node_list)]
+
+            signode = self.node_factory.desc_signature()
+            signode.append(title)
+
+            return [signode, contentnode]
 
         return []
 
@@ -169,50 +174,54 @@ class MemberDefTypeSubRenderer(Renderer):
 
     def title(self):
 
-        kind = []
+        nodes = []
 
         # Variable type or function return type
         if self.data_object.type_:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.type_)
-            kind = renderer.render()
+            nodes.extend(renderer.render())
 
-        name = self.node_factory.strong(text=self.data_object.name)
+        if nodes: nodes.append(self.node_factory.Text(" "))
+        nodes.append(self.node_factory.desc_name(text=self.data_object.name))
 
-        args = []
-        args.extend(kind)
-        args.extend([self.node_factory.Text(" "), name])
-
-        return args
+        return nodes
 
     def description(self):
 
-        description_nodes = []
+        nodes = []
 
         if self.data_object.briefdescription:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.briefdescription)
-            description_nodes.append(self.node_factory.paragraph("", "", *renderer.render()))
+            nodes.extend(renderer.render())
 
         if self.data_object.detaileddescription:
             renderer = self.renderer_factory.create_renderer(self.data_object, self.data_object.detaileddescription)
-            description_nodes.append(self.node_factory.paragraph( "", "", *renderer.render()))
+            nodes.extend(renderer.render())
 
-        return description_nodes
+        return nodes
 
 
     def render(self):
 
         # Build targets for linking
-        term_nodes = self.create_domain_target()
-        term_nodes.extend(self.create_doxygen_target())
+        signode = self.node_factory.desc_signature()
+        signode.extend(self.create_domain_target())
+        signode.extend(self.create_doxygen_target())
 
         # Build title nodes
-        term_nodes.extend(self.title())
-        term = self.node_factory.paragraph("", "", *term_nodes )
+        signode.extend(self.title())
 
         # Build description nodes
-        definition = self.node_factory.paragraph("", "", *self.description())
+        contentnode = self.node_factory.desc_content()
+        contentnode.extend(self.description())
 
-        return [term, self.node_factory.block_quote("", definition)]
+        node = self.node_factory.desc()
+        node.document = self.state.document
+        node['objtype'] = self.data_object.kind
+        node.append(signode)
+        node.append(contentnode)
+
+        return [node]
 
 
 class FuncMemberDefTypeSubRenderer(MemberDefTypeSubRenderer):
@@ -223,7 +232,7 @@ class FuncMemberDefTypeSubRenderer(MemberDefTypeSubRenderer):
 
     def title(self):
 
-        lines = []
+        nodes = []
 
         # Handle any template information
         if self.data_object.templateparamlist:
@@ -231,48 +240,25 @@ class FuncMemberDefTypeSubRenderer(MemberDefTypeSubRenderer):
                     self.data_object,
                     self.data_object.templateparamlist
                     )
-            template = [
-                    self.node_factory.Text("template < ")
-                ]
-            template.extend(renderer.render())
-            template.append(self.node_factory.Text(" >"))
-
-            # Add blank string at the start otherwise for some reason it renders
-            # the emphasis tags around the kind in plain text (same below)
-            lines.append(
-                    self.node_factory.line(
-                        "",
-                        self.node_factory.Text(""),
-                        *template
-                        )
-                    )
+            template_nodes = []
+            template_nodes.append(self.node_factory.Text("template <"))
+            template_nodes.extend(renderer.render())
+            template_nodes.append(self.node_factory.Text("> "))
+            nodes.append(self.node_factory.line("", *template_nodes))
 
         # Get the function type and name
-        args = MemberDefTypeSubRenderer.title(self)
+        nodes.extend(MemberDefTypeSubRenderer.title(self))
 
         # Get the function arguments
-        args.append(self.node_factory.Text("("))
+        paramlist = self.node_factory.desc_parameterlist()
         for i, parameter in enumerate(self.data_object.param):
-            if i: args.append(self.node_factory.Text(", "))
+            param = self.node_factory.desc_parameter('', '', noemph=True)
             renderer = self.renderer_factory.create_renderer(self.data_object, parameter)
-            args.extend(renderer.render())
-        args.append(self.node_factory.Text(")"))
+            param.extend(renderer.render())
+            paramlist.append(param)
+        nodes.append(paramlist)
 
-        lines.append(
-                self.node_factory.line(
-                    "",
-                    self.node_factory.Text(""),
-                    *args
-                    )
-                )
-
-        # Setup the line block with gathered information
-        block = self.node_factory.line_block(
-                "",
-                *lines
-                )
-
-        return [block]
+        return nodes
 
 
 class DefineMemberDefTypeSubRenderer(MemberDefTypeSubRenderer):
@@ -435,7 +421,7 @@ class ParamTypeSubRenderer(Renderer):
         # Parameter name
         if self.data_object.declname:
             if nodelist: nodelist.append(self.node_factory.Text(" "))
-            nodelist.append(self.node_factory.Text(self.data_object.declname))
+            nodelist.append(self.node_factory.emphasis(text=self.data_object.declname))
 
         if self.output_defname and self.data_object.defname:
             if nodelist: nodelist.append(self.node_factory.Text(" "))
@@ -794,11 +780,6 @@ class IncTypeSubRenderer(Renderer):
 
 class RefTypeSubRenderer(Renderer):
 
-    ref_types = {
-            "innerclass" : "class",
-            "innernamespace" : "namespace",
-            }
-
     def __init__(self, compound_parser, *args):
         Renderer.__init__(self, *args)
 
@@ -808,43 +789,31 @@ class RefTypeSubRenderer(Renderer):
 
         # Read in the corresponding xml file and process
         file_data = self.compound_parser.parse(self.data_object.refid)
-        data_renderer = self.renderer_factory.create_renderer(self.data_object, file_data)
 
+        data_renderer = self.renderer_factory.create_renderer(self.data_object, file_data)
         child_nodes = data_renderer.render()
 
-        # Only render the header with refs if we've definitely got content to
-        # put underneath it. Otherwise return an empty list
-        if child_nodes:
+        if not child_nodes:
+            return []
 
-            refid = "%s%s" % (self.project_info.name(), self.data_object.refid)
-            nodelist = self.target_handler.create_target(refid)
+        refid = "%s%s" % (self.project_info.name(), self.data_object.refid)
 
-            # Set up the title and a reference for it (refid)
-            type_ = self.ref_types[self.data_object.node_name]
-            kind = self.node_factory.emphasis(text=type_)
+        name = self.data_object.content_[0].getValue()
+        name = name.rsplit("::", 1)[-1]
 
-            name_text = self.data_object.content_[0].getValue()
-            name_text = name_text.rsplit("::", 1)[-1]
-            name = self.node_factory.strong(text=name_text)
-
-            nodelist = []
-
-            nodelist.append(
-                    self.node_factory.paragraph(
-                        "",
-                        "",
-                        kind,
-                        self.node_factory.Text(" "),
-                        name,
-                        ids=[refid]
-                        )
+        # Defer to function for details
+        return render_compound(
+                name,
+                file_data.compounddef.kind,
+                file_data,
+                child_nodes,
+                self.renderer_factory,
+                self.node_factory,
+                [], # No domain reference
+                self.target_handler.create_target(refid),
+                self.state.document
                 )
 
-            nodelist.extend(child_nodes)
-
-            return nodelist
-
-        return []
 
 class VerbatimTypeSubRenderer(Renderer):
 
@@ -895,3 +864,88 @@ class MixedContainerRenderer(Renderer):
         return renderer.render()
 
 
+class DocListNestedRenderer(object):
+    """
+        Decorator for the list type renderer.
+
+        Creates the proper docutils node based on the sub-type
+        of the underlying data object. Takes care of proper numbering
+        for deeply nested enumerated lists.
+    """
+
+    numeral_kind = ['arabic', 'loweralpha', 'lowerroman', 'upperalpha', 'upperroman']
+
+    def __init__(self, f):
+        self.__render = f
+        self.__nesting_level = 0
+
+    def __get__(self, obj, objtype):
+        """ Support instance methods. """
+        import functools
+        return functools.partial(self.__call__, obj)
+
+    def __call__(self, rend_self):
+        """ Call the wrapped render function. Update the nesting level for the enumerated lists. """
+        rend_instance = rend_self
+        if rend_instance.data_object.node_subtype is "itemized":
+            val = self.__render(rend_instance)
+            return DocListNestedRenderer.render_unordered(rend_instance, children=val)
+        elif rend_instance.data_object.node_subtype is "ordered":
+            self.__nesting_level += 1
+            val = self.__render(rend_instance)
+            self.__nesting_level -= 1
+            return DocListNestedRenderer.render_enumerated(rend_instance, children=val,
+                                                           nesting_level=self.__nesting_level)
+
+        return []
+
+    @staticmethod
+    def render_unordered(renderer, children):
+        nodelist_list = renderer.node_factory.bullet_list("", *children)
+
+        return [nodelist_list]
+
+    @staticmethod
+    def render_enumerated(renderer, children, nesting_level):
+        nodelist_list = renderer.node_factory.enumerated_list("", *children)
+        idx = nesting_level % len(DocListNestedRenderer.numeral_kind)
+        nodelist_list['enumtype'] = DocListNestedRenderer.numeral_kind[idx]
+        nodelist_list['prefix'] = ''
+        nodelist_list['suffix'] = '.'
+
+        return [nodelist_list]
+
+
+class DocListTypeSubRenderer(Renderer):
+    """
+        List renderer.
+        The specifics of the actual list rendering are handled by the
+        decorator around the generic render function.
+    """
+
+    @DocListNestedRenderer
+    def render(self):
+        """ Render all the children depth-first. """
+        nodelist = []
+        for entry in self.data_object.listitem:
+            renderer = self.renderer_factory.create_renderer(self.data_object, entry)
+            nodelist.extend(renderer.render())
+
+        return nodelist
+
+
+class DocListItemTypeSubRenderer(Renderer):
+    """
+        List item renderer.
+    """
+
+    def render(self):
+        """ Render all the children depth-first.
+            Upon return expand the children node list into a docutils list-item.
+        """
+        nodelist = []
+        for entry in self.data_object.para:
+            renderer = self.renderer_factory.create_renderer(self.data_object, entry)
+            nodelist.extend(renderer.render())
+
+        return [self.node_factory.list_item("", *nodelist)]
